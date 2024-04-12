@@ -3,7 +3,7 @@ while true ; do
     if [ "$options" = "quit" ]; then
      exit 0
     else
-     "./cli.py" "$options"
+     "./cli.py" $options
     fi
   done
 done

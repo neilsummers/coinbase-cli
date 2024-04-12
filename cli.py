@@ -1,10 +1,9 @@
 #!/home/neil/CoinbaseCLI/venv/bin/python3
-
+import sys
 from argparse import ArgumentParser
 from uuid import uuid4
 from json import dumps
 
-import dateutil.parser
 import pandas as pd
 from coinbase.rest import RESTClient
 
@@ -18,8 +17,6 @@ base_size_formatter = '{:.8f}'.format
 quote_size_formatter = '{:.2f}'.format
 limit_price_formatter = '{:.2f}'.format
 
-SANDBOX = True  # no true sandbox so set flag to hide actual orders
-
 
 def time_formatter(time_string):
     return time_string[:19]
@@ -32,7 +29,7 @@ def parse_args(cli_args=None):
         assets=False,
         portfolios=False,
         list_portfolios=False,
-        balance_portfolio=True,
+        balance_portfolio=False,
         create_portfolio=False,
         delete_portfolio=False,
         move_portfolio=False,
@@ -90,20 +87,20 @@ def parse_args(cli_args=None):
     parser_fills.add_argument('--product_id', default=None, type=str,
                               help='Get fills for only PRODUCT_ID (default: All) e.g. BTC-USD')
     parser_fills.add_argument('--start', default=None, type=str,
-                              help="start timestamp (e.g. '1970-01-01T00:00:00')")
+                              help="start date or datetime (e.g. '1970-01-01')")
     parser_fills.add_argument('--end', default=None, type=str,
-                              help="end timestamp (e.g. '1970-01-01T00:00:00')")
+                              help="end date or datetime (e.g. '1970-01-01T00:00:00.000Z')")
 
     parser_orders = subparsers.add_parser('orders', help='Get list of orders')
     parser_orders.set_defaults(orders=True)
     parser_orders.add_argument('--limit', default=10, type=int,
-                               help='limit number of orders')
+                               help='limit number of orders (default: 10)')
     parser_orders.add_argument('--product_id', default=None, type=str,
                                help='Get orders for only PRODUCT_ID (default: All) e.g. BTC-USD')
     parser_orders.add_argument('--start', default=None, type=str,
-                               help="start timestamp (e.g. '1970-01-01T00:00:00')")
+                               help="start date or datetime (e.g. '1970-01-01')")
     parser_orders.add_argument('--end', default=None, type=str,
-                               help="end timestamp (e.g. '1970-01-01T00:00:00')")
+                               help="end date or datetime (e.g. '1970-01-01T00:00:00.000Z')")
     parser_orders.add_argument('--status', default=None, type=str,
                                help="filter orders on status type [OPEN, CANCELLED, FILLED]")
 
@@ -130,15 +127,15 @@ def parse_args(cli_args=None):
     parser_limit.add_argument('limit_price', type=float,
                               help='limit price (in USD)')
 
-    parser.add_argument('--live', action='store_true', default=False,
-                        help='enable live orders')
+    parser.add_argument('-v', '--verbose', action='store_true', default=False,
+                        help='verbose output')
 
     arguments = parser.parse_args(cli_args)
     if arguments.order_id:
         arguments.order_ids = arguments.order_id
-    if SANDBOX:
+    if arguments.verbose:
         print(arguments)
-    return arguments
+    return parser, arguments
 
 
 class CoinbaseCLI(object):
@@ -152,6 +149,11 @@ class CoinbaseCLI(object):
     @staticmethod
     def create_order_id():
         return str(uuid4())
+
+    @staticmethod
+    def to_iso8601(time_string):
+        if time_string is not None:
+            return pd.Timestamp(time_string).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
     def accounts(self, asset):
         accounts = self.client.get_accounts()['accounts']
@@ -219,18 +221,15 @@ class CoinbaseCLI(object):
         df = pd.DataFrame([fees])
         df_ = pd.DataFrame([pd.DataFrame([fees]).pop('fee_tier').values[0]])
         df = pd.concat([df.drop('fee_tier', axis=1), df_], axis=1)
-        series = df[['total_volume', 'total_fees', 'pricing_tier', 'usd_from', 'usd_to', 'taker_fee_rate', 'maker_fee_rate']].T[0]
+        series = df[['total_volume', 'total_fees', 'pricing_tier', 'usd_from', 'usd_to', 'taker_fee_rate',
+                     'maker_fee_rate']].T[0]
         print(series.to_string())
 
     def fills(self, order_id=None, product_id=None, start=None, end=None, limit=None):
-        if start is not None:
-            start = dateutil.parser.parse(start)
-        if end is not None:
-            end = dateutil.parser.parse(end)
         fills = self.client.get_fills(order_id=order_id,
                                       product_id=product_id,
-                                      start_sequence_timestamp=start,
-                                      end_sequence_timestamp=end,
+                                      start_sequence_timestamp=self.to_iso8601(start),
+                                      end_sequence_timestamp=self.to_iso8601(end),
                                       limit=limit)['fills']
         if not fills:
             return None
@@ -246,8 +245,11 @@ class CoinbaseCLI(object):
             'total_cost': currency_formatter,
         }, index=False))
 
-    def orders(self, product_id=None, start=None, end=None, limit=None, status=None):
-        orders = self.client.list_orders(product_id=product_id, start_date=start, end_date=end, limit=limit,
+    def orders(self, order_id=None, product_id=None, start=None, end=None, limit=None, status=None):
+        orders = self.client.list_orders(product_id=product_id,
+                                         start_date=self.to_iso8601(start),
+                                         end_date=self.to_iso8601(end),
+                                         limit=limit,
                                          order_status=status)['orders']
         if not orders:
             return None
@@ -256,10 +258,16 @@ class CoinbaseCLI(object):
                                                 'average_filled_price': float,
                                                 'filled_value': float,
                                                 'total_fees': float,
-                                                'total_value_after_fees':float,
+                                                'total_value_after_fees': float,
                                                 })
-        df = df[['order_id', 'product_id', 'status', 'side', 'created_time', 'last_fill_time', 'completion_percentage',
-                 'filled_size', 'average_filled_price', 'filled_value', 'total_fees', 'total_value_after_fees']]
+        df_ = pd.concat([pd.DataFrame(_).T for _ in pd.DataFrame(orders).pop('order_configuration').values]
+                        ).reset_index(names='order_type')
+        df = pd.concat([df.drop(['order_configuration', 'order_type'], axis=1), df_], axis=1)
+        df = df[['order_id', 'product_id', 'status', 'side', 'order_type', 'base_size', 'limit_price', 'created_time',
+                 'last_fill_time', 'completion_percentage', 'filled_size', 'average_filled_price', 'filled_value',
+                 'total_fees', 'total_value_after_fees']]
+        if order_id:
+            df = df[df['order_id'] == order_id]
         print(df.to_string(formatters={
             'created_time': time_formatter,
             'last_fill_time': time_formatter,
@@ -295,7 +303,7 @@ class CoinbaseCLI(object):
             print('no orders to cancel')
 
     def market_order(self, side, size, product_id='BTC-USD'):
-        order_args = self.create_args(side=side,
+        order_args = self.create_args(side=side.upper(),
                                       product_id=product_id,
                                       quote_size=quote_size_formatter(size))
         preview = self.client.preview_market_order(**order_args)
@@ -305,15 +313,13 @@ class CoinbaseCLI(object):
             answer = input('Submit order (y)?')
             if answer.lower() == 'y':
                 order_id = self.create_order_id()
-                if not SANDBOX:
-                    self.client.market_order( client_order_id=order_id, **order_args)
-                else:
-                    print(f"submitted {'SANDBOX ' if SANDBOX else ''}order {order_id}")
-                self.fills(order_id=order_id)
+                self.client.market_order(client_order_id=order_id, **order_args)
+                self.orders(order_id=order_id)
 
     def limit_order(self, side, size, limit_price, product_id='BTC-USD'):
-        base_size = size / limit_price
-        order_args = self.create_args(side=side,
+        fee_rate = float(self.client.get_transaction_summary()['fee_tier']['maker_fee_rate'])
+        base_size = size * (1 + fee_rate) / limit_price
+        order_args = self.create_args(side=side.upper(),
                                       product_id=product_id,
                                       base_size=base_size_formatter(base_size),
                                       limit_price=limit_price_formatter(limit_price),
@@ -325,15 +331,12 @@ class CoinbaseCLI(object):
             answer = input('Submit order (y)?')
             if answer.lower() == 'y':
                 order_id = self.create_order_id()
-                if not SANDBOX:
-                    self.client.limit_order_gtc(client_order_id=order_id, **order_args)
-                else:
-                    print(f"submitted {'SANDBOX ' if SANDBOX else ''}order {order_id}")
-                self.fills(order_id=order_id)
+                self.client.limit_order_gtc(client_order_id=order_id, **order_args)
+                self.orders(order_id=order_id)
 
 
 if __name__ == '__main__':
-    args = parse_args()
+    parser, args = parse_args()
     cli = CoinbaseCLI()
 
     if args.assets:
@@ -350,6 +353,8 @@ if __name__ == '__main__':
             cli.delete_portfolio(args.uuid)
         elif args.move_portfolio:
             cli.move_portfolio_funds(args.value, args.currency, args.source, args.target)
+        else:
+            parser._actions[1].choices['portfolios'].print_usage(sys.stderr)
 
     elif args.price:
         cli.price()
@@ -367,7 +372,10 @@ if __name__ == '__main__':
         cli.cancel_orders(order_ids=args.order_ids)
 
     elif args.market:
-        cli.market_order(side=args.side.upper(), size=args.size)
+        cli.market_order(side=args.side, size=args.size)
 
     elif args.limit:
-        cli.limit_order(side=args.side.upper(), size=args.size, limit_price=args.limit_price)
+        cli.limit_order(side=args.side, size=args.size, limit_price=args.limit_price)
+
+    else:
+        parser.print_usage(sys.stderr)
