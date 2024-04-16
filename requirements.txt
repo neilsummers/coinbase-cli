@@ -1,2 +1,3 @@
 pandas
 coinbase-advanced-py
+cmd2

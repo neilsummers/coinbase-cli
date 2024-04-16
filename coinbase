@@ -1,10 +1,9 @@
 #!/home/neil/CoinbaseCLI/venv/bin/python3
-import cmd
 import sys
-from argparse import ArgumentParser
 from uuid import uuid4
 from json import dumps
 
+import cmd2
 import pandas as pd
 from coinbase.rest import RESTClient
 
@@ -23,9 +22,9 @@ def time_formatter(time_string):
     return time_string[:19]
 
 
-def parse_args(cli_args=None):
-    parser = ArgumentParser()
-    subparsers = parser.add_subparsers(help='sub-commands')
+def build_parser():
+    parser = cmd2.Cmd2ArgumentParser()
+    subparsers = parser.add_subparsers()
     parser.set_defaults(
         assets=False,
         portfolios=False,
@@ -130,13 +129,16 @@ def parse_args(cli_args=None):
 
     parser.add_argument('-v', '--verbose', action='store_true', default=False,
                         help='verbose output')
+    return parser
 
+
+def parse_args(parser, cli_args=None):
     arguments = parser.parse_args(cli_args)
     if arguments.order_id:
         arguments.order_ids = arguments.order_id
     if arguments.verbose:
         print(arguments)
-    return parser, arguments
+    return arguments
 
 
 class CoinbaseAPI(object):
@@ -337,7 +339,8 @@ class CoinbaseAPI(object):
 
 
 def coinbaseCLI(args=None):
-    parser, args = parse_args(args)
+    parser = build_parser()
+    args = parse_args(parser, args)
     api = CoinbaseAPI()
 
     if args.assets:
@@ -382,20 +385,110 @@ def coinbaseCLI(args=None):
         parser.print_usage(sys.stderr)
 
 
-def coinbaseREPL():
-    while True:
-        try:
-            args = input('coinbase> ').split()
-            coinbaseCLI(args)
-        except SystemExit:
-            pass
-        except (EOFError, KeyboardInterrupt):
-            print()
-            break
+class CoinbaseShell(cmd2.Cmd):
+    intro = "Coinbase API Interactive Shell"
+    prompt = '(coinbase) '
+
+    parser = build_parser()
+    parser_portfolios = parser._actions[1].choices['portfolios']
+    list_portfolios = parser_portfolios._actions[1].choices['list']
+    balance_portfolios = parser_portfolios._actions[1].choices['balance']
+    create_portfolios = parser_portfolios._actions[1].choices['create']
+    delete_portfolios = parser_portfolios._actions[1].choices['delete']
+    move_portfolios = parser_portfolios._actions[1].choices['move']
+    parser_assets = parser._actions[1].choices['assets']
+    parser_price = parser._actions[1].choices['price']
+    parser_fees = parser._actions[1].choices['fees']
+    parser_fills = parser._actions[1].choices['fills']
+    parser_orders = parser._actions[1].choices['orders']
+    parser_cancel = parser._actions[1].choices['cancel']
+    parser_market = parser._actions[1].choices['market']
+    parser_limit = parser._actions[1].choices['limit']
+
+    def __init__(self):
+        self.api = CoinbaseAPI()
+        super().__init__()
+
+    # this is here just to get access to the ArgumentParser top level help using `coinbase` command
+    # as `help` alone gives the cmd2 help without the descriptions
+    @cmd2.with_category('Coinbase')
+    @cmd2.with_argparser(parser)
+    def do_coinbase(self, args):
+        self.parser.print_help()
+
+    @cmd2.with_category('Coinbase')
+    @cmd2.with_argparser(parser_assets)
+    def do_assets(self, args):
+        self.api.assets()
+
+    @cmd2.with_category('Coinbase')
+    @cmd2.with_argparser(parser_portfolios)
+    def do_portfolios(self, args):
+        func = getattr(args, 'func', None)
+        if func is not None:
+            func(self, args)
+        else:
+            self.do_help('portfolios')
+
+    def portfolios_list(self, args):
+        self.api.portfolios()
+
+    def portfolios_balance(self, args):
+        self.api.portfolio_balances(args.uuid)
+
+    def portfolios_create(self, args):
+        self.api.create_portfolio(args.name)
+
+    def portfolios_delete(self, args):
+        self.api.delete_portfolio(args.uuid)
+
+    def portfolios_move(self, args):
+        self.api.move_portfolio_funds(args.value, args.currency, args.source, args.target)
+
+    list_portfolios.set_defaults(func=portfolios_list)
+    balance_portfolios.set_defaults(func=portfolios_balance)
+    create_portfolios.set_defaults(func=portfolios_create)
+    delete_portfolios.set_defaults(func=portfolios_delete)
+    move_portfolios.set_defaults(func=portfolios_move)
+
+    @cmd2.with_category('Coinbase')
+    @cmd2.with_argparser(parser_price)
+    def do_price(self, args):
+        self.api.price()
+
+    @cmd2.with_category('Coinbase')
+    @cmd2.with_argparser(parser_fees)
+    def do_fees(self, args):
+        self.api.fees()
+
+    @cmd2.with_category('Coinbase')
+    @cmd2.with_argparser(parser_fills)
+    def do_fills(self, args):
+        self.api.fills(product_id=args.product_id, start=args.start, end=args.end, limit=args.limit)
+
+    @cmd2.with_category('Coinbase')
+    @cmd2.with_argparser(parser_orders)
+    def do_orders(self, args):
+        self.api.orders(product_id=args.product_id, start=args.start, end=args.end, limit=args.limit, status=args.status)
+
+    @cmd2.with_category('Coinbase')
+    @cmd2.with_argparser(parser_cancel)
+    def do_cancel(self, args):
+        self.api.cancel_orders(order_ids=args.order_ids)
+
+    @cmd2.with_category('Coinbase')
+    @cmd2.with_argparser(parser_market)
+    def do_market(self, args):
+        self.api.market_order(side=args.side, size=args.size)
+
+    @cmd2.with_category('Coinbase')
+    @cmd2.with_argparser(parser_limit)
+    def do_limit(self, args):
+        self.api.limit_order(side=args.side, size=args.size, limit_price=args.limit_price)
 
 
 if __name__ == '__main__':
     if sys.argv[1:]:
         coinbaseCLI()
     else:
-        coinbaseREPL()
+        sys.exit(CoinbaseShell().cmdloop())
