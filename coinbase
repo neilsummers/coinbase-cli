@@ -26,6 +26,7 @@ def build_parser():
     parser = cmd2.Cmd2ArgumentParser()
     subparsers = parser.add_subparsers()
     parser.set_defaults(
+        product=False,
         assets=False,
         portfolios=False,
         list_portfolios=False,
@@ -42,6 +43,11 @@ def build_parser():
         market=False,
         limit=False,
     )
+
+    parser_product = subparsers.add_parser('product', help='Get/Set product_id')
+    parser_product.set_defaults(product=True)
+    parser_product.add_argument('product_id', nargs='?', default=None, type=str,
+                                help='product_id, default: BTC-USD, omit to get current value')
 
     parser_assets = subparsers.add_parser('assets', help='List of assets with available balances')
     parser_assets.set_defaults(assets=True)
@@ -108,7 +114,7 @@ def build_parser():
     parser_cancel.set_defaults(cancel=True, order_ids=None)
     parser_cancel.add_argument('order_id', type=str, nargs='*',
                                help="order_id of order to cancel, "
-                                    "multiple order_ids can be specified after the flag (up to 100), "
+                                    "multiple order_ids can be specified as arguments (up to 100), "
                                     "all open orders canceled if omitted")
 
     parser_market = subparsers.add_parser('market', help='Market order')
@@ -144,6 +150,7 @@ def parse_args(parser, cli_args=None):
 class CoinbaseAPI(object):
     def __init__(self):
         self.client = RESTClient(key_file='./coinbase_cloud_api_key.json')
+        self.product_id = 'BTC-USD'
 
     @staticmethod
     def create_args(**kwargs):
@@ -157,6 +164,9 @@ class CoinbaseAPI(object):
     def to_iso8601(time_string):
         if time_string is not None:
             return pd.Timestamp(time_string).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+    def set_product_id(self, product_id):
+        self.product_id = product_id.upper()
 
     def accounts(self, asset):
         accounts = self.client.get_accounts()['accounts']
@@ -215,9 +225,8 @@ class CoinbaseAPI(object):
         pass
 
     def price(self):
-        product_id = 'BTC-USD'
-        product = self.client.get_product(product_id=product_id)
-        print(f"{product_id} $ {float(product['price']):,.2f}")
+        product = self.client.get_product(product_id=self.product_id)
+        print(f"{self.product_id} $ {float(product['price']):,.2f}")
 
     def fees(self):
         fees = self.client.get_transaction_summary()
@@ -305,10 +314,11 @@ class CoinbaseAPI(object):
         else:
             print('no orders to cancel')
 
-    def market_order(self, side, size, product_id='BTC-USD'):
+    def market_order(self, side, size, product_id=None):
         order_args = self.create_args(side=side.upper(),
-                                      product_id=product_id,
+                                      product_id=self.product_id if product_id is None else product_id,
                                       quote_size=quote_size_formatter(size))
+        print(order_args)
         preview = self.client.preview_market_order(**order_args)
         print('PREVIEW ORDER:')
         print(dumps(preview, indent=2))
@@ -319,14 +329,15 @@ class CoinbaseAPI(object):
                 self.client.market_order(client_order_id=order_id, **order_args)
                 self.orders(order_id=order_id)
 
-    def limit_order(self, side, size, limit_price, product_id='BTC-USD'):
+    def limit_order(self, side, size, limit_price, product_id=None):
         fee_rate = float(self.client.get_transaction_summary()['fee_tier']['maker_fee_rate'])
         base_size = size * (1 + fee_rate) / limit_price
         order_args = self.create_args(side=side.upper(),
-                                      product_id=product_id,
+                                      product_id=self.product_id if product_id is None else product_id,
                                       base_size=base_size_formatter(base_size),
                                       limit_price=limit_price_formatter(limit_price),
                                       post_only=True)
+        print(order_args)
         preview = self.client.preview_limit_order_gtc(**order_args)
         print('PREVIEW ORDER:')
         print(dumps(preview, indent=2))
@@ -343,7 +354,12 @@ def coinbaseCLI(args=None):
     args = parse_args(parser, args)
     api = CoinbaseAPI()
 
-    if args.assets:
+    if args.product:
+        print(api.product_id)
+        if args.product_id is not None:
+            raise RuntimeError('Not valid for single command line execution as state is not stored, use Shell instead.')
+
+    elif args.assets:
         api.assets()
 
     elif args.portfolios:
@@ -376,10 +392,10 @@ def coinbaseCLI(args=None):
         api.cancel_orders(order_ids=args.order_ids)
 
     elif args.market:
-        api.market_order(side=args.side, size=args.size)
+        api.market_order(side=args.side, size=args.size, product_id=api.product_id)
 
     elif args.limit:
-        api.limit_order(side=args.side, size=args.size, limit_price=args.limit_price)
+        api.limit_order(side=args.side, size=args.size, limit_price=args.limit_price, product_id=api.product_id)
 
     else:
         parser.print_usage(sys.stderr)
@@ -396,6 +412,7 @@ class CoinbaseShell(cmd2.Cmd):
     create_portfolios = parser_portfolios._actions[1].choices['create']
     delete_portfolios = parser_portfolios._actions[1].choices['delete']
     move_portfolios = parser_portfolios._actions[1].choices['move']
+    parser_product = parser._actions[1].choices['product']
     parser_assets = parser._actions[1].choices['assets']
     parser_price = parser._actions[1].choices['price']
     parser_fees = parser._actions[1].choices['fees']
@@ -415,6 +432,14 @@ class CoinbaseShell(cmd2.Cmd):
     @cmd2.with_argparser(parser)
     def do_coinbase(self, args):
         self.parser.print_help()
+
+    @cmd2.with_category('Coinbase')
+    @cmd2.with_argparser(parser_product)
+    def do_product(self, args):
+        if args.product_id is None:
+            self.poutput(self.api.product_id)
+        else:
+            self.api.set_product_id(args.product_id)
 
     @cmd2.with_category('Coinbase')
     @cmd2.with_argparser(parser_assets)
@@ -479,12 +504,12 @@ class CoinbaseShell(cmd2.Cmd):
     @cmd2.with_category('Coinbase')
     @cmd2.with_argparser(parser_market)
     def do_market(self, args):
-        self.api.market_order(side=args.side, size=args.size)
+        self.api.market_order(side=args.side, size=args.size, product_id=self.api.product_id)
 
     @cmd2.with_category('Coinbase')
     @cmd2.with_argparser(parser_limit)
     def do_limit(self, args):
-        self.api.limit_order(side=args.side, size=args.size, limit_price=args.limit_price)
+        self.api.limit_order(side=args.side, size=args.size, limit_price=args.limit_price, product_id=self.api.product_id)
 
 
 if __name__ == '__main__':
