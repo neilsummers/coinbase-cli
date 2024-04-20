@@ -1,4 +1,5 @@
-#!/home/neil/CoinbaseCLI/venv/bin/python3
+#!/usr/bin/env python3
+import importlib.resources
 import sys
 from uuid import uuid4
 from json import dumps
@@ -149,7 +150,8 @@ def parse_args(parser, cli_args=None):
 
 class CoinbaseAPI(object):
     def __init__(self):
-        self.client = RESTClient(key_file='./coinbase_cloud_api_key.json')
+        key_file = importlib.resources.path('coinbase_cli', 'coinbase_cloud_api_key.json').as_posix()
+        self.client = RESTClient(key_file=key_file)
         self.product_id = 'BTC-USD'
 
     @staticmethod
