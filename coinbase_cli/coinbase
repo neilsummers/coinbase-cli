@@ -74,7 +74,7 @@ def build_parser():
     move_portfolio.set_defaults(move_portfolio=True)
     move_portfolio.add_argument('value', type=float,
                                 help='Value of funds to move')
-    move_portfolio.add_argument('currency', choices=['usd', 'btc', 'USD', 'BTC'], type=str,
+    move_portfolio.add_argument('currency', type=str,
                                 help='Currency of funds to move')
     move_portfolio.add_argument('source', type=str,
                                 help='Move from FROM portfolio with UUID')
@@ -128,7 +128,7 @@ def build_parser():
     parser_limit = subparsers.add_parser('limit', help='Limit order')
     parser_limit.set_defaults(limit=True)
     parser_limit.add_argument('side', type=str, choices=['buy', 'sell'],
-                               help="BUY or SELL side limit order")
+                              help="BUY or SELL side limit order")
     parser_limit.add_argument('size', type=float,
                               help='size (in USD) of order')
     parser_limit.add_argument('limit_price', type=float,
@@ -167,6 +167,10 @@ class CoinbaseAPI(object):
         if time_string is not None:
             return pd.Timestamp(time_string).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
+    def get_products(self):
+        products = self.client.get_products()['products']
+        return [product['product_id'] for product in products]
+
     def set_product_id(self, product_id):
         self.product_id = product_id.upper()
 
@@ -199,11 +203,10 @@ class CoinbaseAPI(object):
 
     def portfolio_balances(self, uuid):
         breakdown = self.client.get_portfolio_breakdown(uuid)['breakdown']
+        total_balance = breakdown['portfolio_balances']['total_balance']
+        print(f"Total equivalent: {total_balance['value']} {total_balance['currency']}")
         for asset in breakdown['spot_positions']:
-            if asset['asset'] == 'USD':
-                print(f"{asset['total_balance_fiat']} {asset['asset']}")
-            if asset['asset'] == 'BTC':
-                print(f"{asset['total_balance_crypto']} {asset['asset']}")
+            print(f"{asset['total_balance_crypto']} {asset['asset']}")
 
     def create_portfolio(self, name):
         portfolio = self.client.create_portfolio(name)
@@ -218,7 +221,6 @@ class CoinbaseAPI(object):
         print('BEFORE:')
         self.portfolio_balances(source)
         self.portfolio_balances(target)
-        assert currency in ['USD', 'BTC']
         self.client.move_portfolio_funds(currency_formatter(value), currency.upper(), source, target)
         print('AFTER:')
         self.portfolio_balances(source)
@@ -452,6 +454,12 @@ class CoinbaseShell(cmd2.Cmd):
         else:
             self.api.set_product_id(args.product_id)
 
+    def get_products(self):
+        return self.api.get_products()
+
+    product_id_arg = [arg for arg in parser_product._actions if arg.dest == 'product_id'][0]
+    product_id_arg.set_choices_provider(get_products)
+
     @cmd2.with_category('Coinbase')
     @cmd2.with_argparser(parser_assets)
     def do_assets(self, args):
@@ -517,10 +525,16 @@ class CoinbaseShell(cmd2.Cmd):
     def do_fills(self, args):
         self.api.fills(product_id=args.product_id, start=args.start, end=args.end, limit=args.limit)
 
+    product_id_arg = [arg for arg in parser_fills._actions if arg.dest == 'product_id'][0]
+    product_id_arg.set_choices_provider(get_products)
+
     @cmd2.with_category('Coinbase')
     @cmd2.with_argparser(parser_orders)
     def do_orders(self, args):
         self.api.orders(product_id=args.product_id, start=args.start, end=args.end, limit=args.limit, status=args.status)
+
+    product_id_arg = [arg for arg in parser_orders._actions if arg.dest == 'product_id'][0]
+    product_id_arg.set_choices_provider(get_products)
 
     @cmd2.with_category('Coinbase')
     @cmd2.with_argparser(parser_cancel)
