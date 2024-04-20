@@ -108,7 +108,7 @@ def build_parser():
                                help="start date or datetime (e.g. '1970-01-01')")
     parser_orders.add_argument('--end', default=None, type=str,
                                help="end date or datetime (e.g. '1970-01-01T00:00:00.000Z')")
-    parser_orders.add_argument('--status', default=None, type=str,
+    parser_orders.add_argument('--status', default=None, type=str, choices=['OPEN', 'CANCELLED', 'FILLED'],
                                help="filter orders on status type [OPEN, CANCELLED, FILLED]")
 
     parser_cancel = subparsers.add_parser('cancel', help='Cancel orders')
@@ -192,6 +192,10 @@ class CoinbaseAPI(object):
         df = pd.DataFrame(portfolios)
         print(df.to_string(index=False))
         return df
+
+    def list_portfolio_uuids(self):
+        portfolios = self.client.get_portfolios()['portfolios']
+        return [portfolio['uuid'] for portfolio in portfolios]
 
     def portfolio_balances(self, uuid):
         breakdown = self.client.get_portfolio_breakdown(uuid)['breakdown']
@@ -291,6 +295,11 @@ class CoinbaseAPI(object):
             'total_value_after_fees': currency_formatter,
         }, index=False))
         return df
+
+    def open_orders(self):
+        orders = self.client.list_orders(product_id=self.product_id, order_status='OPEN')['orders']
+        order_ids = [order['order_id'] for order in orders]
+        return order_ids
 
     def cancel_orders(self, order_ids=None):
         open_orders_ = self.orders(status='OPEN', limit=100)  # max orders that can be canceled in API is 100
@@ -460,8 +469,14 @@ class CoinbaseShell(cmd2.Cmd):
     def portfolios_list(self, args):
         self.api.portfolios()
 
+    def list_portfolio_uuids(self):
+        return self.api.list_portfolio_uuids()
+
     def portfolios_balance(self, args):
         self.api.portfolio_balances(args.uuid)
+
+    uuid_arg = [arg for arg in balance_portfolios._actions if arg.dest == 'uuid'][0]
+    uuid_arg.set_choices_provider(list_portfolio_uuids)
 
     def portfolios_create(self, args):
         self.api.create_portfolio(args.name)
@@ -469,8 +484,17 @@ class CoinbaseShell(cmd2.Cmd):
     def portfolios_delete(self, args):
         self.api.delete_portfolio(args.uuid)
 
+    uuid_arg = [arg for arg in delete_portfolios._actions if arg.dest == 'uuid'][0]
+    uuid_arg.set_choices_provider(list_portfolio_uuids)
+
     def portfolios_move(self, args):
         self.api.move_portfolio_funds(args.value, args.currency, args.source, args.target)
+
+    source_arg = [arg for arg in move_portfolios._actions if arg.dest == 'source'][0]
+    source_arg.set_choices_provider(list_portfolio_uuids)
+
+    target_arg = [arg for arg in move_portfolios._actions if arg.dest == 'target'][0]
+    target_arg.set_choices_provider(list_portfolio_uuids)
 
     list_portfolios.set_defaults(func=portfolios_list)
     balance_portfolios.set_defaults(func=portfolios_balance)
@@ -502,6 +526,12 @@ class CoinbaseShell(cmd2.Cmd):
     @cmd2.with_argparser(parser_cancel)
     def do_cancel(self, args):
         self.api.cancel_orders(order_ids=args.order_ids)
+
+    def open_orders(self):
+        return self.api.open_orders()
+
+    order_id_arg = [arg for arg in parser_cancel._actions if arg.dest == 'order_id'][0]
+    order_id_arg.set_choices_provider(open_orders)
 
     @cmd2.with_category('Coinbase')
     @cmd2.with_argparser(parser_market)
