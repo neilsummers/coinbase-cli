@@ -99,11 +99,27 @@ An API key from Coinbase Advanced Trading needs to be generated (https://docs.cl
 
 ## Installation
 
+Clone the repository.
+```shell
+git clone https://github.com/neilsummers/coinbase-cli.git
+cd coinbase-cli
+```
+
 The CLI can be installed via pip.
 ```shell
 pip install .
 ```
 The executable `coinbase` is installed your local bin location which is typically `~/.local/bin`. The key is saved in the python library install location.
+
+Additionally, a `Makefile` is provided for install, which also contains a linux menu entry.
+```shell
+make install
+make install-menu
+```
+You can customize the terminal program used with
+```shell
+make TERMINAL=xfce4-terminal install-menu
+```
 
 ### Uninstall
 
@@ -111,4 +127,9 @@ The key and executable can be removed using
 ```shell
 pip uninstall coinbase-cli
 ```
-note that this will not work from the root directory.
+Note that this will not work from the root directory.
+
+Alternatively, use the makefile command which works around this limitation.
+```shell
+make uninstall
+```

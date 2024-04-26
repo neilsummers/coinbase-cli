@@ -416,7 +416,7 @@ def coinbaseCLI(args=None):
 
 class CoinbaseShell(cmd2.Cmd):
     intro = "Coinbase API Interactive Shell"
-    prompt = '(coinbase) '
+    prompt = '\033[1;32m(coinbase)\033[0m '
 
     parser = build_parser()
     parser_portfolios = parser._actions[1].choices['portfolios']
